@@ -1,4 +1,4 @@
-
+<!-- Pocket Ledger v1.1 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -7,6 +7,7 @@
 <title>Pocket Ledger</title>
 <style>
 *{box-sizing:border-box}
+[hidden]{display:none!important}
 body{margin:0;background:#f4f6f8;color:#172033;
 font:16px Arial,sans-serif}
 main{max-width:620px;margin:auto;padding:22px 16px}
@@ -22,12 +23,19 @@ input,select,button{width:100%;padding:12px;border-radius:9px;
 border:1px solid #cbd5e1;font-size:16px}
 button{background:#172033;color:white;border:0;
 font-weight:bold;margin-top:14px;cursor:pointer}
+button.secondary{background:#e2e8f0;color:#172033}
 .entry{padding:12px 0;border-bottom:1px solid #e2e8f0}
 .entry strong{display:block;margin-bottom:5px}
 .entry small{color:#64748b}
 .entry button{width:auto;padding:7px 10px;margin:8px 5px 0 0;
 font-size:13px;background:#e2e8f0;color:#172033}
+.entry.editing{background:#fffbeb}
 .negative{color:#dc2626}.positive{color:#15803d}
+.bar{height:10px;border-radius:5px;background:#e2e8f0;
+margin-top:12px;overflow:hidden}
+.bar span{display:block;height:100%;width:0;background:#15803d}
+.bar span.warn{background:#f59e0b}
+.bar span.over{background:#dc2626}
 </style>
 </head>
 <body>
@@ -52,7 +60,15 @@ font-size:13px;background:#e2e8f0;color:#172033}
 </div>
 
 <section class="card">
-<h2>Add transaction</h2>
+<div class="muted">This month</div>
+<div class="amount" id="monthNet">₪0.00</div>
+<div class="muted" id="monthInfo"></div>
+<div class="bar"><span id="barFill"></span></div>
+<div class="muted" id="barText"></div>
+</section>
+
+<section class="card">
+<h2 id="formTitle">Add transaction</h2>
 <form id="form">
 <label for="type">Transaction type</label>
 <select id="type">
@@ -70,7 +86,8 @@ step="0.01" placeholder="0.00" required>
 <label for="date">Date</label>
 <input id="date" type="date" required>
 
-<button type="submit">Save transaction</button>
+<button type="submit" id="submitBtn">Save transaction</button>
+<button type="button" id="cancel" class="secondary" hidden>Cancel edit</button>
 </form>
 </section>
 
@@ -86,16 +103,53 @@ step="0.01" placeholder="0.00" required>
 const $ = id => document.getElementById(id);
 const key = "pocket-ledger-v1";
 let items = [];
+let editingId = null;
 try {
   items = JSON.parse(localStorage.getItem(key) || "[]");
   if (!Array.isArray(items)) items = [];
 } catch { items = []; }
 
-$("date").value = new Date().toLocaleDateString("en-CA");
+const today = () => new Date().toLocaleDateString("en-CA");
+$("date").value = today();
 const money = n => "₪" + n.toLocaleString("en-IL", {
   minimumFractionDigits: 2, maximumFractionDigits: 2
 });
+const signed = n => (n < 0 ? "−" : "") + money(Math.abs(n));
 const save = () => localStorage.setItem(key, JSON.stringify(items));
+
+function resetForm() {
+  editingId = null;
+  $("form").reset();
+  $("date").value = today();
+  $("formTitle").textContent = "Add transaction";
+  $("submitBtn").textContent = "Save transaction";
+  $("cancel").hidden = true;
+}
+
+function renderOverview() {
+  const month = today().slice(0, 7);
+  const m = items.filter(x => x.date.slice(0, 7) === month);
+  const mInc = m.filter(x => x.type === "income")
+    .reduce((s,x) => s + x.amount, 0);
+  const mExp = m.filter(x => x.type === "expense")
+    .reduce((s,x) => s + x.amount, 0);
+  const net = mInc - mExp;
+
+  $("monthNet").textContent = signed(net);
+  $("monthNet").className = "amount " + (net < 0 ? "negative" : "positive");
+  $("monthInfo").textContent = m.length + " transaction" +
+    (m.length === 1 ? "" : "s") + " · in " + money(mInc) +
+    " · out " + money(mExp);
+
+  const pct = mInc > 0 ? (mExp / mInc) * 100 : (mExp > 0 ? 100 : 0);
+  const shown = Math.min(pct, 100);
+  $("barFill").style.width = shown + "%";
+  $("barFill").className = pct > 100 ? "over" : pct >= 80 ? "warn" : "";
+  $("barText").textContent = mInc > 0
+    ? "Spent " + Math.round(pct) + "% of this month's income"
+    : mExp > 0 ? "Expenses with no income this month"
+    : "No activity this month";
+}
 
 function render() {
   const income = items.filter(x => x.type === "income")
@@ -103,9 +157,12 @@ function render() {
   const expense = items.filter(x => x.type === "expense")
     .reduce((s,x) => s + x.amount, 0);
 
-  $("balance").textContent = money(income - expense);
+  $("balance").textContent = signed(income - expense);
+  $("balance").className = "balance" +
+    (income - expense < 0 ? " negative" : "");
   $("income").textContent = money(income);
   $("expense").textContent = money(expense);
+  renderOverview();
   $("list").replaceChildren();
 
   if (!items.length) {
@@ -116,7 +173,7 @@ function render() {
   [...items].sort((a,b) => b.date.localeCompare(a.date))
     .forEach(item => {
       const row = document.createElement("div");
-      row.className = "entry";
+      row.className = "entry" + (item.id === editingId ? " editing" : "");
       const title = document.createElement("strong");
       title.textContent = item.description;
       const detail = document.createElement("small");
@@ -128,15 +185,32 @@ function render() {
       value.textContent = (item.type === "income" ? "+" : "−")
         + money(item.amount);
 
+      const edit = document.createElement("button");
+      edit.textContent = "Edit";
+      edit.type = "button";
+      edit.onclick = () => {
+        editingId = item.id;
+        $("type").value = item.type;
+        $("description").value = item.description;
+        $("amount").value = item.amount;
+        $("date").value = item.date;
+        $("formTitle").textContent = "Edit transaction";
+        $("submitBtn").textContent = "Update transaction";
+        $("cancel").hidden = false;
+        $("form").scrollIntoView({behavior: "smooth", block: "start"});
+        render();
+      };
+
       const del = document.createElement("button");
       del.textContent = "Delete";
       del.type = "button";
       del.onclick = () => {
         if (!confirm("Delete this transaction?")) return;
         items = items.filter(x => x.id !== item.id);
+        if (editingId === item.id) resetForm();
         save(); render();
       };
-      row.append(title, detail, value, del);
+      row.append(title, detail, value, edit, del);
       $("list").append(row);
     });
 }
@@ -151,15 +225,21 @@ $("form").addEventListener("submit", event => {
     alert("Please enter valid transaction details.");
     return;
   }
-  items.push({
-    id: crypto.randomUUID(),
-    type: $("type").value,
-    description, amount, date
-  });
+  const type = $("type").value;
+  const existing = editingId && items.find(x => x.id === editingId);
+  if (existing) {
+    Object.assign(existing, {type, description, amount, date});
+  } else {
+    items.push({
+      id: crypto.randomUUID(),
+      type, description, amount, date
+    });
+  }
+  resetForm();
   save(); render();
-  $("form").reset();
-  $("date").value = new Date().toLocaleDateString("en-CA");
 });
+
+$("cancel").onclick = () => { resetForm(); render(); };
 
 $("export").onclick = () => {
   const q = value => '"' + String(value).replace(/"/g,'""') + '"';
