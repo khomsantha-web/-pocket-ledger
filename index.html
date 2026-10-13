@@ -1,0 +1,182 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pocket Ledger</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#f4f6f8;color:#172033;
+font:16px Arial,sans-serif}
+main{max-width:620px;margin:auto;padding:22px 16px}
+h1{margin-bottom:5px}
+.muted{color:#64748b;font-size:14px}
+.card{background:white;padding:18px;border-radius:16px;
+margin:14px 0;box-shadow:0 2px 10px #00000008}
+.balance{font-size:30px;font-weight:bold;margin-top:8px}
+.stats{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.amount{font-size:20px;font-weight:bold;margin-top:8px}
+label{display:block;font-size:14px;margin:12px 0 6px}
+input,select,button{width:100%;padding:12px;border-radius:9px;
+border:1px solid #cbd5e1;font-size:16px}
+button{background:#172033;color:white;border:0;
+font-weight:bold;margin-top:14px;cursor:pointer}
+.entry{padding:12px 0;border-bottom:1px solid #e2e8f0}
+.entry strong{display:block;margin-bottom:5px}
+.entry small{color:#64748b}
+.entry button{width:auto;padding:7px 10px;margin:8px 5px 0 0;
+font-size:13px;background:#e2e8f0;color:#172033}
+.negative{color:#dc2626}.positive{color:#15803d}
+</style>
+</head>
+<body>
+<main>
+<h1>Pocket Ledger</h1>
+<p class="muted">Your money, made simple.</p>
+
+<section class="card">
+<div class="muted">Current balance (₪)</div>
+<div class="balance" id="balance">₪0.00</div>
+</section>
+
+<div class="stats">
+<section class="card">
+<div class="muted">Income</div>
+<div class="amount positive" id="income">₪0.00</div>
+</section>
+<section class="card">
+<div class="muted">Expenses</div>
+<div class="amount negative" id="expense">₪0.00</div>
+</section>
+</div>
+
+<section class="card">
+<h2>Add transaction</h2>
+<form id="form">
+<label for="type">Transaction type</label>
+<select id="type">
+<option value="expense">Expense</option>
+<option value="income">Income</option>
+</select>
+
+<label for="description">Description</label>
+<input id="description" placeholder="e.g. Groceries" required>
+
+<label for="amount">Amount (₪)</label>
+<input id="amount" type="number" min="0.01"
+step="0.01" placeholder="0.00" required>
+
+<label for="date">Date</label>
+<input id="date" type="date" required>
+
+<button type="submit">Save transaction</button>
+</form>
+</section>
+
+<section class="card">
+<h2>Recent transactions</h2>
+<div id="list"></div>
+<button type="button" id="export">Export CSV</button>
+<p class="muted">Data is stored in this browser on this device.</p>
+</section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const key = "pocket-ledger-v1";
+let items = [];
+try {
+  items = JSON.parse(localStorage.getItem(key) || "[]");
+  if (!Array.isArray(items)) items = [];
+} catch { items = []; }
+
+$("date").value = new Date().toLocaleDateString("en-CA");
+const money = n => "₪" + n.toLocaleString("en-IL", {
+  minimumFractionDigits: 2, maximumFractionDigits: 2
+});
+const save = () => localStorage.setItem(key, JSON.stringify(items));
+
+function render() {
+  const income = items.filter(x => x.type === "income")
+    .reduce((s,x) => s + x.amount, 0);
+  const expense = items.filter(x => x.type === "expense")
+    .reduce((s,x) => s + x.amount, 0);
+
+  $("balance").textContent = money(income - expense);
+  $("income").textContent = money(income);
+  $("expense").textContent = money(expense);
+  $("list").replaceChildren();
+
+  if (!items.length) {
+    $("list").textContent = "No transactions yet. Add your first one!";
+    return;
+  }
+
+  [...items].sort((a,b) => b.date.localeCompare(a.date))
+    .forEach(item => {
+      const row = document.createElement("div");
+      row.className = "entry";
+      const title = document.createElement("strong");
+      title.textContent = item.description;
+      const detail = document.createElement("small");
+      detail.textContent = item.date + " · " +
+        (item.type === "income" ? "Income" : "Expense");
+      const value = document.createElement("div");
+      value.className = "amount " +
+        (item.type === "income" ? "positive" : "negative");
+      value.textContent = (item.type === "income" ? "+" : "−")
+        + money(item.amount);
+
+      const del = document.createElement("button");
+      del.textContent = "Delete";
+      del.type = "button";
+      del.onclick = () => {
+        if (!confirm("Delete this transaction?")) return;
+        items = items.filter(x => x.id !== item.id);
+        save(); render();
+      };
+      row.append(title, detail, value, del);
+      $("list").append(row);
+    });
+}
+
+$("form").addEventListener("submit", event => {
+  event.preventDefault();
+  const description = $("description").value.trim();
+  const amount = Number($("amount").value);
+  const date = $("date").value;
+  if (!description || !Number.isFinite(amount) ||
+      amount <= 0 || !date) {
+    alert("Please enter valid transaction details.");
+    return;
+  }
+  items.push({
+    id: crypto.randomUUID(),
+    type: $("type").value,
+    description, amount, date
+  });
+  save(); render();
+  $("form").reset();
+  $("date").value = new Date().toLocaleDateString("en-CA");
+});
+
+$("export").onclick = () => {
+  const q = value => '"' + String(value).replace(/"/g,'""') + '"';
+  const csv = "\uFEFFType,Description,Amount,Date\n" +
+    items.map(x => [x.type,x.description,x.amount,x.date]
+      .map(q).join(",")).join("\n");
+  const url = URL.createObjectURL(
+    new Blob([csv], {type:"text/csv;charset=utf-8;"})
+  );
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "pocket-ledger.csv";
+  a.click();
+  URL.revokeObjectURL(url);
+};
+
+render();
+</script>
+</body>
+</html>
